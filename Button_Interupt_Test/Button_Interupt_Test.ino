@@ -50,7 +50,7 @@ ISR(INT4_vect){
 //  then switches the state of the program
 ISR(TIMER1_OVF_vect){
   // Stop the timer
-  *tccr1b = 0;
+  *tccr1b &= 0b11111000;
 
   //Check that the pin is still low
   if(!(*pine & (1 << 4))){
