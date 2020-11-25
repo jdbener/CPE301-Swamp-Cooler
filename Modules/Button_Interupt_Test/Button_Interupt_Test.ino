@@ -7,9 +7,10 @@
  *
  * Modification History
  * Name          Date          Comment
- * Joshua Dahl   11/10/2020    Created initaial version, ran into issues with
- *                              debouncing not working properly so added
- *                              a timing mechanism to fix it
+ * Joshua Dahl   11/10/2020    Created initaial version, of interupt button
+ *                              ran into issues with debouncing not working
+ *                              properly so added a timing mechanism to fix it.
+ *                        Assumes button is connected to PE.4 = Pin PWM 2 = INT4
  */
 
 

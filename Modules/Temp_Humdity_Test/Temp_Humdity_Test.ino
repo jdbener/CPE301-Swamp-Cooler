@@ -1,10 +1,10 @@
 /*
 * Temp_Humidity_Test.ino
 * Program which writes out the temperature and humidity
-* 
+*
 * MODIFICATION HISTORY
 * Name          Date            Comment
-* www.elegoo.com10/25/202       Distributed initial version
+* www.elegoo.com10/25/2020       Distributed initial version
 * Joshua Dahl   11/11/2020      Modified program to measure the temperature as
 *                               soon as the sensor has a new reading.
 *                               (Also changed units to fahrenheit)
@@ -29,7 +29,7 @@ void loop() {
   if(dht_sensor.measure(&temperature, &humidity)) {
     // Convert the temperature from celsius to fahrenheit
     temperature = temperature * 9.0/5 + 32;
-    
+
     // Print out the results
     Serial.print("T = ");
     Serial.print(temperature, 1);

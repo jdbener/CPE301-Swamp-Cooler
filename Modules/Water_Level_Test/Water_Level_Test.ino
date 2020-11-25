@@ -1,11 +1,11 @@
 /*
  * Water_Level_test.ino
  * File which reads the water level.
- * 
+ *
  * Results seam to range between 0 when I wipe the sensor dry
  * and 320 when it is completely submerged.
  * Then tend to be ~10 when not sumberged and not dry
- * 
+ *
  * Modification History
  * Name          Date          Comment
  * Joshua Dahl   11/12/2020    Converted a polling scheme of reading from the ADC (lab 8)
@@ -83,13 +83,13 @@ void setAdcChannel(uint8_t channel){
   if(channel >= 8){
     // Drop off the leading bit from the channel
     channel -= 8;
-    
+
     // Set the MUX bit in adcsrb (Sets that we are using channels 8-16)
     *adcsrb |= (1 << 3);
   }
 
   // Choose which channel we are using (0-7 or 8-16 depending on results of the if)
-  *admux |= channel;  
+  *admux |= channel;
 
   // Start the conversion
   *adcsra |= (1 << 6);
