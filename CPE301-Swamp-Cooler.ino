@@ -44,7 +44,16 @@
  * Joshua Dahl   11/24/2020    Merged module code together, added code for
  *                              switching between a more complex state layout
  * Joshua Dahl   11/25/2020    Added code for printing relevant information on
- *                               the LCD
+ *                              the LCD
+ * Joshua Dahl   11/25/2020    Added a timer to the ADC to add a check to make
+ *                              sure that the level is in fact below the
+ *                              threshold. (I was having bonucing like issues
+ *                              near the threshold.)
+ *                             Also moved code for printing timestamp to the
+ *                              bottom of the state change function (after
+ *                              interupts re-enabled.)
+ *                             Added critical regions to loop function to make
+ *                              sure printing turns out properly.
  */
 #include <Wire.h>                // i2c
 #include <DS3231.h>              // Real Time Clock
@@ -73,6 +82,12 @@ volatile byte* const timsk1 = (byte*) 0x6F;
 volatile byte* const tccr1a = (byte*) 0x80;
 volatile byte* const tccr1b = (byte*) 0x81;
 volatile uint16_t* const tcnt1 = (uint16_t*) 0x84;
+
+// Timer 3 Registers
+volatile byte* const timsk3 = (byte*) 0x71;
+volatile byte* const tccr3a = (byte*) 0x90;
+volatile byte* const tccr3b = (byte*) 0x91;
+volatile uint16_t* const tcnt3 = (uint16_t*) 0x94;
 
 // ADC Registers
 volatile byte* const admux = (byte*) 0x7c;
@@ -134,13 +149,14 @@ ISR(INT4_vect){
     // Start the timer (prescaler 1/256) set to run for .25 seconds
     *tcnt1 = 34286;
     *tccr1b = (1 << 2);
+
 }
 
 // Timer1 overflowing interrupt handler
 // Debounces the input by checking that the button is still pressed
 //  then switches the state of the program (disabled -> idle, other -> disabled)
 ISR(TIMER1_OVF_vect){
-    // Stop the timer
+    // Stop the timer 1
     *tccr1b &= 0b11111000;
 
     // Check that the pin is still low
@@ -158,19 +174,45 @@ ISR(ADC_vect){
     // If we are in a state which cares about water level
     if(state == Running || state == Idle){
         // If the water level is too low
+        //  (and the timer isn't already running)
+        if(!isTimer3Running() && *adcData <= WATER_LEVEL_THRESHOLD ){
+            // Start the timer 3 (prescaler 1/256) set to run for .25 seconds
+            *tcnt3 = 34286;
+            *tccr3b = (1 << 2);
+        }
+    // If we are in the error state
+    } else if (state == Error)
+        // If the water level has returned to an acceptable range
+        //  (and the timer isn't already running)
+        if(!isTimer3Running() && *adcData > WATER_LEVEL_THRESHOLD){
+            // Start the timer 3 (prescaler 1/256) set to run for .25 seconds
+            *tcnt3 = 34286;
+            *tccr3b = (1 << 2);
+        }
+
+    // Start the next conversion
+    *adcsra |= (1 << 6);
+}
+
+// Timer3 overflowing interrupt handler
+// Waits a moment after a water level error and checks it again
+ISR(TIMER3_OVF_vect){
+    // Stop the timer 3
+    *tccr3b &= 0b11111000;
+
+    // If we are in a state which cares about water level
+    if(state == Running || state == Idle){
+        // If the water level is still too low
         if(*adcData <= WATER_LEVEL_THRESHOLD)
             // Jump to the error state
             changeState(Error);
     // If we are in the error state
     } else if (state == Error)
-        // If the water level has returned to an acceptable range
+        // If the water level has still returned to an acceptable range
         if(*adcData > WATER_LEVEL_THRESHOLD)
             // Return to the idle state
             // (temperature polling may then pull it to the running state)
             changeState(Idle);
-
-    // Start the next conversion
-    *adcsra |= (1 << 6);
 }
 
 /*------------------------------------------------------------------------------
@@ -214,6 +256,10 @@ void setup(){
     // Set LCD state display
     lcd.print("Disabled");
 
+
+    // Print Legend
+    Serial.println("D = Disabled, I = Idle, R = Running, and E = Error");
+
     // Enable interrupts globally
     sei();
 }
@@ -229,6 +275,9 @@ void loop(){
             // Convert the temperature from celsius to fahrenheit
             temperature = temperature * 9.0/5 + 32;
 
+            // No interupts while printing
+            cli();
+
             // Print out the results
             // Set the cursor to column 0, line 1
             // (NOTE: line 1 is the second row, since counting begins with 0):
@@ -238,6 +287,10 @@ void loop(){
             lcd.print((char) 0b11011111); lcd.print("F");
             lcd.print(" - ");
             lcd.print(humidity, 1); lcd.print("%RH");
+
+
+            // Renable interupts before considering a temperature based state change
+            sei();
 
             // Polled transitions (idle -> running and running -> idle) based
             //  on temperature.
@@ -249,16 +302,23 @@ void loop(){
     }
 
     // Only run the stepper motor in the running state
+    // TODO: Needs to have interupts disabled?
     if(state == Running) stepperMotor.step(rolePerMinute);
 
     // Print out the current water level percentage while in the error state
     if(state == Error){
+        // No interupts while printing
+        cli();
+
         // Set the cursor to column 0, line 1
         // (NOTE: line 1 is the second row, since counting begins with 0):
         lcd.setCursor(0, 1);
-        lcd.print("Water Level: ");
+        lcd.print("Water Lvl ");
         lcd.print(float(*adcData) / MAX_WATER_LEVEL, 1);
         lcd.print("%");
+
+        // Renable interupts once finished printing
+        sei();
     }
 }
 
@@ -266,10 +326,6 @@ void loop(){
 void changeState(State newState){
     // No Interrupts while changing state
     cli();
-
-    // Print the timestamp of the state transition
-    // TODO: Print information about which state from and to
-    printTimestamp("bob");
 
     // Handle any transition specific details between specific states
     // Disabled -> Any Other
@@ -291,6 +347,7 @@ void changeState(State newState){
         // Make the LED yellow
         setLEDColors(RED + GREEN);
         // Set LCD state display
+        lcd.clear();
         lcd.print("Disabled");
         break;
     case Idle:
@@ -298,6 +355,7 @@ void changeState(State newState){
         // Make the LED green
         setLEDColors(GREEN);
         // Set LCD state display
+        lcd.clear();
         lcd.print("Idling");
         break;
     case Running:
@@ -305,6 +363,7 @@ void changeState(State newState){
         // Make the LED blue
         setLEDColors(BLUE);
         // Set LCD state display
+        lcd.clear();
         lcd.print("Running Fan");
         break;
     case Error:
@@ -312,14 +371,25 @@ void changeState(State newState){
         // Make the LED red
         setLEDColors(RED);
         // Set LCD state display
-        lcd.print("Error (Refill Water)");
+        lcd.clear();
+        lcd.print("Error (Refill)");
         break;
     }
 
+    // Print the old state character before updating state
+    Serial.print(state2Char(state));
     // Mark that the state has changed
     state = newState;
+
     // Enable interrupts globally
     sei();
+
+    // Print which state is being transitioned to
+    Serial.print(" -> ");
+    Serial.print(state2Char(state));
+    Serial.print(" occured at ");
+    // Print the timestamp of the state transition
+    printTimestamp();
 }
 
 /*------------------------------------------------------------------------------
@@ -335,6 +405,7 @@ void setupRGBLED(){
 }
 
 void setupDisableButton(){
+    // Setup timer 1
     // No compare match or waveform generation
     *tccr1a = 0;
     // No input filtering/waveform generation; timer stopped
@@ -354,6 +425,14 @@ void setupDisableButton(){
 
 // Sets the required initial settings for the adc
 void adcInit(){
+    // Setup timer 3
+    // No compare match or waveform generation
+    *tccr3a = 0;
+    // No input filtering/waveform generation; timer stopped
+    *tccr3b = 0;
+    // Enable the overflow interrupt
+    *timsk3 = 1;
+
     // 7 = enable,
     // 5 = auto trigger = disable
     // 3 = interrupt = enable,
@@ -396,7 +475,11 @@ void printTimestamp(const char* event){
     Serial.print(dt.day);    Serial.print(" ");
     Serial.print(dt.hour);   Serial.print(":");
     Serial.print(dt.minute); Serial.print(":");
-    Serial.print(dt.second); Serial.println("");
+    if(dt.second < 10) Serial.print("0");
+    Serial.println(dt.second);
+
+    // Wait for all of the data to be sent
+    Serial.flush();
 }
 
 // Disables the ADC
@@ -427,4 +510,20 @@ void setAdcChannel(uint8_t channel){
 
     // Start the conversion
     *adcsra |= (1 << 6);
+}
+
+// Function which checks if the ADC's timer is running
+bool isTimer3Running(){
+    return *tccr3b &= 0b0000111;
+}
+
+// Function which converts the current execution state into a character
+char state2Char(State state){
+    switch(state){
+    case Disabled: return 'D';
+    case Idle: return 'I';
+    case Running: return 'R';
+    case Error: return 'E';
+    }
+    return 'U';
 }
