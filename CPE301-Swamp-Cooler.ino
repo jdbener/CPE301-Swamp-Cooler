@@ -47,13 +47,14 @@
  *                              the LCD
  * Joshua Dahl   11/25/2020    Added a timer to the ADC to add a check to make
  *                              sure that the level is in fact below the
- *                              threshold. (I was having bonucing like issues
+ *                              threshold. (I was having bouncing like issues
  *                              near the threshold.)
  *                             Also moved code for printing timestamp to the
  *                              bottom of the state change function (after
- *                              interupts re-enabled.)
+ *                              interrupts re-enabled.)
  *                             Added critical regions to loop function to make
  *                              sure printing turns out properly.
+ * Joshua Dahl   11/30/2020    Spellchecking and final bug fixes
  */
 #include <Wire.h>                // i2c
 #include <DS3231.h>              // Real Time Clock
@@ -103,6 +104,16 @@ volatile byte* const eicrb = (byte*) 0x6A;
 
 // Variable tracking the current state of the program
 enum State {Disabled, Idle, Running, Error} state;
+// Function which converts the current execution state into a character
+char state2Char(State state){
+    switch(state){
+    case Disabled: return 'D';
+    case Idle: return 'I';
+    case Running: return 'R';
+    case Error: return 'E';
+    }
+    return 'U';
+}
 
 // Uncomment to reset the clock time
 //#define RESET_CLOCK_TIME
@@ -134,12 +145,6 @@ LiquidCrystal lcd(37, 35, 33, 31, 29, 27);
 #define TEMPERATURE_THRESHOLD 80
 
 /*------------------------------------------------------------------------------
-    Prototypes
-------------------------------------------------------------------------------*/
-
-void printTimestamp(const char* event = nullptr);
-
-/*------------------------------------------------------------------------------
     Interrupt Handlers
 ------------------------------------------------------------------------------*/
 
@@ -149,7 +154,6 @@ ISR(INT4_vect){
     // Start the timer (prescaler 1/256) set to run for .25 seconds
     *tcnt1 = 34286;
     *tccr1b = (1 << 2);
-
 }
 
 // Timer1 overflowing interrupt handler
@@ -226,22 +230,21 @@ void setup(){
     // Set Serial baud rate
     Serial.begin(9600);
 
+    // Initialize DS3231 (Real Time Clock)
+    clock.begin();
+    // Use the battery to track the time
+    clock.setBattery(true, true);
+    // Send sketch compiling time to Arduino.
+#if defined(RESET_CLOCK_TIME)
+    Serial.println("Resynced clock memory.");
+    clock.setDateTime(__DATE__, __TIME__);
+#endif
+
     // Enable the RGB LED
     setupRGBLED();
 
     // Enable the button interrupt and timer
     setupDisableButton();
-
-    // Initialize DS3231 (Real Time Clock)
-    clock.begin();
-//     // Send sketch compiling time to Arduino.
-//     //  Should be disabled after the first run.
-//     //  If this continues to occur the date and time will be
-//     //    reset on each run of the program.
-// #if defined(RESET_CLOCK_TIME)
-//     Serial.println("Resynced clock memory.");
-//     clock.setDateTime(__DATE__, __TIME__);
-// #endif
 
     // ADC setup
     adcInit();
@@ -255,7 +258,6 @@ void setup(){
     lcd.begin(16, 2);
     // Set LCD state display
     lcd.print("Disabled");
-
 
     // Print Legend
     Serial.println("D = Disabled, I = Idle, R = Running, and E = Error");
@@ -275,7 +277,7 @@ void loop(){
             // Convert the temperature from celsius to fahrenheit
             temperature = temperature * 9.0/5 + 32;
 
-            // No interupts while printing
+            // No interrupts while printing
             cli();
 
             // Print out the results
@@ -288,8 +290,7 @@ void loop(){
             lcd.print(" - ");
             lcd.print(humidity, 1); lcd.print("%RH");
 
-
-            // Renable interupts before considering a temperature based state change
+            // Re-enable interrupts before considering a temperature based state change
             sei();
 
             // Polled transitions (idle -> running and running -> idle) based
@@ -302,12 +303,12 @@ void loop(){
     }
 
     // Only run the stepper motor in the running state
-    // TODO: Needs to have interupts disabled?
+    // TODO: Need to have interrupts disabled?
     if(state == Running) stepperMotor.step(rolePerMinute);
 
     // Print out the current water level percentage while in the error state
     if(state == Error){
-        // No interupts while printing
+        // No interrupts while printing
         cli();
 
         // Set the cursor to column 0, line 1
@@ -317,7 +318,7 @@ void loop(){
         lcd.print(float(*adcData) / MAX_WATER_LEVEL, 1);
         lcd.print("%");
 
-        // Renable interupts once finished printing
+        // Re-enable interrupts once finished printing
         sei();
     }
 }
@@ -387,7 +388,7 @@ void changeState(State newState){
     // Print which state is being transitioned to
     Serial.print(" -> ");
     Serial.print(state2Char(state));
-    Serial.print(" occured at ");
+    Serial.print(" occurred at ");
     // Print the timestamp of the state transition
     printTimestamp();
 }
@@ -466,16 +467,15 @@ void setLEDColors(int color){
 }
 
 // Function which prints the timestamp of when an arbitrary event occured
-void printTimestamp(const char* event){
+void printTimestamp(){
     RTCDateTime dt = clock.getDateTime();
 
-    if(event){ Serial.print(event);     Serial.print(" occurred at: "); }
     Serial.print(dt.year);   Serial.print("-");
     Serial.print(dt.month);  Serial.print("-");
     Serial.print(dt.day);    Serial.print(" ");
     Serial.print(dt.hour);   Serial.print(":");
     Serial.print(dt.minute); Serial.print(":");
-    if(dt.second < 10) Serial.print("0");
+    if(dt.second < 10) Serial.print('0');
     Serial.println(dt.second);
 
     // Wait for all of the data to be sent
@@ -515,15 +515,4 @@ void setAdcChannel(uint8_t channel){
 // Function which checks if the ADC's timer is running
 bool isTimer3Running(){
     return *tccr3b &= 0b0000111;
-}
-
-// Function which converts the current execution state into a character
-char state2Char(State state){
-    switch(state){
-    case Disabled: return 'D';
-    case Idle: return 'I';
-    case Running: return 'R';
-    case Error: return 'E';
-    }
-    return 'U';
 }
